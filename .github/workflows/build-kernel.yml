@@ -31,6 +31,7 @@ env:
   ARCH: arm64
   SOC_DEFCONFIG: s5e9925_defconfig
   DEVICE_FRAGMENT: b0s.config
+  RUSH_FRAGMENT: rushkernel.config
 
 jobs:
   build:
@@ -80,8 +81,9 @@ jobs:
 
       - name: Apply RushKernel customizations
         run: |
-          cp config/rushkernel.fragment kernel/arch/arm64/configs/rushkernel.fragment
+          cp config/${{ env.RUSH_FRAGMENT }} kernel/arch/arm64/configs/${{ env.RUSH_FRAGMENT }}
           echo "RushKernel custom config applied"
+          ls -la kernel/arch/arm64/configs/ | grep -E "b0s|rushkernel|s5e9925"
 
       - name: Configure kernel
         run: |
@@ -94,7 +96,7 @@ jobs:
             CROSS_COMPILE_COMPAT=arm-linux-gnueabi- \
             ${{ env.SOC_DEFCONFIG }} \
             ${{ env.DEVICE_FRAGMENT }} \
-            rushkernel.fragment
+            ${{ env.RUSH_FRAGMENT }}
 
       - name: Build kernel
         run: |
