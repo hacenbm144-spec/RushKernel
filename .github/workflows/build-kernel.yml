@@ -45,7 +45,7 @@ jobs:
       - name: Set up build environment
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc bison flex libssl-dev make libelf-dev libncurses5-dev zstd lz4 cpio python3 git wget unzip device-tree-compiler ccache
+          sudo apt-get install -y bc bison flex libssl-dev make libelf-dev libncurses5-dev zstd lz4 cpio python3 git wget unzip device-tree-compiler ccache gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi
 
       - name: Set build metadata
         run: |
@@ -67,15 +67,13 @@ jobs:
 
       - name: Set up Clang toolchain
         run: |
-          mkdir -p toolchain
-          cd toolchain
-          wget -q https://github.com/kdrag0n/proton-clang/releases/download/20210522/proton-clang-13.0.0.tar.zst -O clang.tar.zst
-          zstd -d clang.tar.zst -o clang.tar
-          tar -xf clang.tar
-          rm clang.tar clang.tar.zst
-          mv proton-clang-* clang
-          ls clang/bin/clang
-          clang/bin/clang --version
+          mkdir -p toolchain/clang
+          cd toolchain/clang
+          wget -q https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r487747c.tar.gz -O clang.tar.gz
+          tar -xzf clang.tar.gz
+          rm clang.tar.gz
+          ls bin/clang
+          bin/clang --version
 
       - name: Apply RushKernel customizations
         run: |
@@ -174,7 +172,7 @@ jobs:
             ## Build info
             - Build date: `${{ env.BUILD_DATE }}`
             - Kernel source: ExtremeXT/android_kernel_samsung_s5e9925 @ `${{ env.KERNEL_COMMIT }}`
-            - Toolchain: Proton Clang 13
+            - Toolchain: AOSP Clang r487747c
 
             ## Features
             - **BBR** TCP congestion control (default)
@@ -188,14 +186,8 @@ jobs:
             ## Installation
             See INSTALL.md for full instructions.
 
-            **Quick install:**
-            1. Download the zip
-            2. Boot to TWRP / OrangeFox
-            3. Install the zip
-            4. Reboot
-
             ## Disclaimer
-            Only flash on **SM-S908B (b0s)**. Use at your own risk.
+            Only flash on **SM-S908B (b0s)**.
           files: |
             ${{ env.ZIP_NAME }}
             ${{ env.ZIP_NAME }}.sha256
