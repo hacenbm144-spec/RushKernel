@@ -1,1 +1,215 @@
 
+name: Build RushKernel
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'config/**'
+      - 'anykernel/**'
+      - '.github/workflows/build-kernel.yml'
+  workflow_dispatch:
+    inputs:
+      kernel_branch:
+        description: 'Kernel source branch (leave empty for default)'
+        required: false
+        default: ''
+      create_release:
+        description: 'Create GitHub Release'
+        type: boolean
+        default: true
+      version:
+        description: 'Version tag (e.g. v1.0.0)'
+        required: false
+        default: 'v1.0.0'
+
+env:
+  KERNEL_NAME: RushKernel
+  DEVICE_CODENAME: b0s
+  DEVICE_MODEL: SM-S908B
+  KERNEL_REPO: https://github.com/ExtremeXT/android_kernel_samsung_s5e9925
+  ANYKERNEL_REPO: https://github.com/osm0sis/AnyKernel3
+  ARCH: arm64
+  SOC_DEFCONFIG: s5e9925_defconfig
+  DEVICE_FRAGMENT: b0s.config
+
+jobs:
+  build:
+    name: Build kernel for ${{ env.DEVICE_CODENAME }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout RushKernel repo
+        uses: actions/checkout@v4
+
+      - name: Set up build environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc bison flex libssl-dev make libelf-dev libncurses5-dev zstd lz4 cpio python3 git wget unzip device-tree-compiler ccache
+
+      - name: Set build metadata
+        run: |
+          echo "BUILD_DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
+          echo "SHORT_SHA=$(echo ${GITHUB_SHA} | cut -c1-7)" >> $GITHUB_ENV
+          echo "VERSION=${{ inputs.version || 'v1.0.0' }}" >> $GITHUB_ENV
+          echo "ZIP_NAME=${{ env.KERNEL_NAME }}-${{ inputs.version || 'v1.0.0' }}-${{ env.DEVICE_CODENAME }}-$(date +%Y%m%d).zip" >> $GITHUB_ENV
+
+      - name: Clone kernel source
+        run: |
+          if [ -n "${{ inputs.kernel_branch }}" ]; then
+            git clone --depth=1 -b "${{ inputs.kernel_branch }}" "${{ env.KERNEL_REPO }}" kernel
+          else
+            git clone --depth=1 "${{ env.KERNEL_REPO }}" kernel
+          fi
+          cd kernel
+          echo "Cloned commit: $(git rev-parse HEAD)"
+          echo "KERNEL_COMMIT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+
+      - name: Set up Clang toolchain
+        run: |
+          mkdir -p toolchain
+          cd toolchain
+          wget -q https://github.com/kdrag0n/proton-clang/releases/download/20210522/proton-clang-13.0.0.tar.zst -O clang.tar.zst
+          zstd -d clang.tar.zst -o clang.tar
+          tar -xf clang.tar
+          rm clang.tar clang.tar.zst
+          mv proton-clang-* clang
+          ls clang/bin/clang
+          clang/bin/clang --version
+
+      - name: Apply RushKernel customizations
+        run: |
+          cp config/rushkernel.fragment kernel/arch/arm64/configs/rushkernel.fragment
+          echo "RushKernel custom config applied"
+
+      - name: Configure kernel
+        run: |
+          cd kernel
+          export PATH="${GITHUB_WORKSPACE}/toolchain/clang/bin:${PATH}"
+          make O=out ARCH=${{ env.ARCH }} \
+            LLVM=1 LLVM_IAS=1 \
+            CC=clang \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_COMPAT=arm-linux-gnueabi- \
+            ${{ env.SOC_DEFCONFIG }} \
+            ${{ env.DEVICE_FRAGMENT }} \
+            rushkernel.fragment
+
+      - name: Build kernel
+        run: |
+          cd kernel
+          export PATH="${GITHUB_WORKSPACE}/toolchain/clang/bin:${PATH}"
+          export KBUILD_BUILD_USER="hacenbm144"
+          export KBUILD_BUILD_HOST="RushKernel-CI"
+          make -j$(nproc) O=out ARCH=${{ env.ARCH }} \
+            LLVM=1 LLVM_IAS=1 \
+            CC=clang \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_COMPAT=arm-linux-gnueabi- \
+            2>&1 | tee ../build.log
+
+      - name: Verify build output
+        run: |
+          cd kernel/out/arch/arm64/boot
+          ls -la
+          file Image* dtb* dtbo* 2>/dev/null || true
+          [ -f Image ] || [ -f Image.gz ] || [ -f Image.lz4 ] || (echo "ERROR: No kernel image produced" && exit 1)
+
+      - name: Set up AnyKernel3
+        run: |
+          git clone --depth=1 ${{ env.ANYKERNEL_REPO }} AnyKernel3
+          rm -f AnyKernel3/anykernel.sh
+          cp anykernel/anykernel.sh AnyKernel3/anykernel.sh
+          chmod +x AnyKernel3/anykernel.sh
+
+      - name: Copy kernel image to AnyKernel3
+        run: |
+          if [ -f kernel/out/arch/arm64/boot/Image.lz4 ]; then
+            cp kernel/out/arch/arm64/boot/Image.lz4 AnyKernel3/
+          elif [ -f kernel/out/arch/arm64/boot/Image.gz ]; then
+            cp kernel/out/arch/arm64/boot/Image.gz AnyKernel3/
+          elif [ -f kernel/out/arch/arm64/boot/Image ]; then
+            cp kernel/out/arch/arm64/boot/Image AnyKernel3/
+          fi
+          if [ -f kernel/out/arch/arm64/boot/dtbo.img ]; then
+            cp kernel/out/arch/arm64/boot/dtbo.img AnyKernel3/
+          fi
+
+      - name: Package AnyKernel3 zip
+        run: |
+          cd AnyKernel3
+          zip -r9 "../${{ env.ZIP_NAME }}" . -x ".git/*" "README.md" "*.gitignore"
+          cd ..
+          ls -la ${{ env.ZIP_NAME }}
+          sha256sum ${{ env.ZIP_NAME }} > ${{ env.ZIP_NAME }}.sha256
+
+      - name: Upload kernel zip artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.KERNEL_NAME }}-${{ env.BUILD_DATE }}-${{ env.SHORT_SHA }}
+          path: |
+            ${{ env.ZIP_NAME }}
+            ${{ env.ZIP_NAME }}.sha256
+          retention-days: 30
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-${{ env.BUILD_DATE }}-${{ env.SHORT_SHA }}
+          path: build.log
+          retention-days: 14
+
+      - name: Create GitHub Release
+        if: github.event_name == 'workflow_dispatch' && inputs.create_release == true
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.VERSION }}-${{ env.BUILD_DATE }}
+          name: RushKernel ${{ env.VERSION }} (${{ env.BUILD_DATE }})
+          body: |
+            # RushKernel ${{ env.VERSION }}
+
+            Custom kernel for **Samsung Galaxy S22 Ultra (Exynos)** — `${{ env.DEVICE_CODENAME }}` / `${{ env.DEVICE_MODEL }}`
+
+            ## Build info
+            - Build date: `${{ env.BUILD_DATE }}`
+            - Kernel source: [`ExtremeXT/android_kernel_samsung_s5e9925`](${{ env.KERNEL_REPO }}) @ `${{ env.KERNEL_COMMIT }}`
+            - Toolchain: Proton Clang 13
+
+            ## Features
+            - **BBR** TCP congestion control (default) — better latency under load
+            - **FQ** packet scheduler (default) — fair queueing for smoother network
+            - **TCP Fast Open** — faster TCP handshakes
+            - **MGLRU** — Multi-Gen LRU memory management for better responsiveness
+            - **ZRAM with zstd** — efficient compressed swap
+            - **ZSWAP** enabled — better memory pressure handling
+            - **WireGuard** built-in — modern VPN support
+
+            ## Installation
+            See [INSTALL.md](https://github.com/${{ github.repository }}/blob/main/docs/INSTALL.md) for full instructions.
+
+            **Quick install:**
+            1. Download `${{ env.ZIP_NAME }}`
+            2. Boot to TWRP / OrangeFox
+            3. Install the zip
+            4. Reboot
+
+            ## Verification
+            SHA256 hashes are provided in the `.sha256` file.
+
+            ## Credits
+            - **ExtremeXT** for the kernel source
+            - **osm0sis** for AnyKernel3
+            - **kdrag0n** for Proton Clang
+
+            ## Disclaimer
+            This kernel is **only for SM-S908B (b0s)**. Flashing on any other device WILL fail.
+            Use at your own risk. Always have a recovery plan (TWRP backup, Odin firmware ready).
+          files: |
+            ${{ env.ZIP_NAME }}
+            ${{ env.ZIP_NAME }}.sha256
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
