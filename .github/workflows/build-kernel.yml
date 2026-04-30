@@ -69,7 +69,7 @@ jobs:
         run: |
           mkdir -p toolchain/clang
           cd toolchain/clang
-          wget -q https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r487747c.tar.gz -O clang.tar.gz
+          wget -q https://github.com/ZyCromerZ/Clang/releases/download/19.0.0git-20240728-release/Clang-19.0.0git-20240728.tar.gz -O clang.tar.gz
           tar -xzf clang.tar.gz
           rm clang.tar.gz
           ls bin/clang
@@ -172,7 +172,7 @@ jobs:
             ## Build info
             - Build date: `${{ env.BUILD_DATE }}`
             - Kernel source: ExtremeXT/android_kernel_samsung_s5e9925 @ `${{ env.KERNEL_COMMIT }}`
-            - Toolchain: AOSP Clang r487747c
+            - Toolchain: ZyCromerZ Clang 19
 
             ## Features
             - **BBR** TCP congestion control (default)
