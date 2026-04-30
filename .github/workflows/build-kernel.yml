@@ -1,4 +1,3 @@
-
 name: Build RushKernel
 
 on:
@@ -35,7 +34,7 @@ env:
 
 jobs:
   build:
-    name: Build kernel for ${{ env.DEVICE_CODENAME }}
+    name: Build kernel for b0s
     runs-on: ubuntu-22.04
     timeout-minutes: 60
 
@@ -170,42 +169,33 @@ jobs:
           body: |
             # RushKernel ${{ env.VERSION }}
 
-            Custom kernel for **Samsung Galaxy S22 Ultra (Exynos)** — `${{ env.DEVICE_CODENAME }}` / `${{ env.DEVICE_MODEL }}`
+            Custom kernel for **Samsung Galaxy S22 Ultra (Exynos)** — `b0s` / `SM-S908B`
 
             ## Build info
             - Build date: `${{ env.BUILD_DATE }}`
-            - Kernel source: [`ExtremeXT/android_kernel_samsung_s5e9925`](${{ env.KERNEL_REPO }}) @ `${{ env.KERNEL_COMMIT }}`
+            - Kernel source: ExtremeXT/android_kernel_samsung_s5e9925 @ `${{ env.KERNEL_COMMIT }}`
             - Toolchain: Proton Clang 13
 
             ## Features
-            - **BBR** TCP congestion control (default) — better latency under load
-            - **FQ** packet scheduler (default) — fair queueing for smoother network
-            - **TCP Fast Open** — faster TCP handshakes
-            - **MGLRU** — Multi-Gen LRU memory management for better responsiveness
-            - **ZRAM with zstd** — efficient compressed swap
-            - **ZSWAP** enabled — better memory pressure handling
-            - **WireGuard** built-in — modern VPN support
+            - **BBR** TCP congestion control (default)
+            - **FQ** packet scheduler (default)
+            - **TCP Fast Open**
+            - **MGLRU** Multi-Gen LRU memory management
+            - **ZRAM** with zstd compression
+            - **ZSWAP** enabled by default
+            - **WireGuard** built-in
 
             ## Installation
-            See [INSTALL.md](https://github.com/${{ github.repository }}/blob/main/docs/INSTALL.md) for full instructions.
+            See INSTALL.md for full instructions.
 
             **Quick install:**
-            1. Download `${{ env.ZIP_NAME }}`
+            1. Download the zip
             2. Boot to TWRP / OrangeFox
             3. Install the zip
             4. Reboot
 
-            ## Verification
-            SHA256 hashes are provided in the `.sha256` file.
-
-            ## Credits
-            - **ExtremeXT** for the kernel source
-            - **osm0sis** for AnyKernel3
-            - **kdrag0n** for Proton Clang
-
             ## Disclaimer
-            This kernel is **only for SM-S908B (b0s)**. Flashing on any other device WILL fail.
-            Use at your own risk. Always have a recovery plan (TWRP backup, Odin firmware ready).
+            Only flash on **SM-S908B (b0s)**. Use at your own risk.
           files: |
             ${{ env.ZIP_NAME }}
             ${{ env.ZIP_NAME }}.sha256
