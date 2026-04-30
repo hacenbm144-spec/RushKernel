@@ -111,28 +111,29 @@ jobs:
             CROSS_COMPILE_COMPAT=arm-linux-gnueabi- \
             2>&1 | tee ../build.log
 
-      - name: Verify build output
+      - name: Verify and prepare raw kernel Image
         run: |
           cd kernel/out/arch/arm64/boot
           ls -la
           file Image* dtb* dtbo* 2>/dev/null || true
-          [ -f Image ] || [ -f Image.gz ] || [ -f Image.lz4 ] || (echo "ERROR: No kernel image produced" && exit 1)
-
-      - name: Ensure Image.lz4 exists (force lz4 compression)
-        run: |
-          cd kernel/out/arch/arm64/boot
-          if [ ! -f Image.lz4 ]; then
-            echo "Image.lz4 not produced by kernel build, creating manually from Image"
-            if [ -f Image ]; then
-              lz4 -B6 --content-size -9 Image Image.lz4
-            elif [ -f Image.gz ]; then
+          # Samsung b0s requires raw uncompressed Image (KERNEL_FMT=raw)
+          # If only compressed versions exist, decompress to raw Image
+          if [ ! -f Image ]; then
+            echo "Raw Image not found, attempting to decompress..."
+            if [ -f Image.gz ]; then
               gunzip -k Image.gz
-              lz4 -B6 --content-size -9 Image Image.lz4
+              echo "Decompressed Image.gz to Image"
+            elif [ -f Image.lz4 ]; then
+              lz4 -d Image.lz4 Image
+              echo "Decompressed Image.lz4 to Image"
+            else
+              echo "ERROR: No kernel image found in any format"
+              exit 1
             fi
           fi
-          ls -la Image*
-          echo "Final kernel image format check:"
-          file Image.lz4
+          ls -la Image
+          file Image
+          echo "Kernel ready as raw Image (matches Samsung b0s KERNEL_FMT=raw)"
 
       - name: Set up AnyKernel3
         run: |
@@ -141,18 +142,19 @@ jobs:
           cp anykernel/anykernel.sh AnyKernel3/anykernel.sh
           chmod +x AnyKernel3/anykernel.sh
 
-      - name: Copy kernel image to AnyKernel3
+      - name: Copy raw kernel Image to AnyKernel3
         run: |
-          cp kernel/out/arch/arm64/boot/Image.lz4 AnyKernel3/
+          cp kernel/out/arch/arm64/boot/Image AnyKernel3/Image
           if [ -f kernel/out/arch/arm64/boot/dtbo.img ]; then
             cp kernel/out/arch/arm64/boot/dtbo.img AnyKernel3/
             echo "dtbo.img included"
           else
-            echo "WARNING: dtbo.img not produced — using stock dtbo at flash time"
+            echo "WARNING: dtbo.img not produced — flashing kernel only"
           fi
           if [ -f kernel/out/arch/arm64/boot/dtb.img ]; then
             cp kernel/out/arch/arm64/boot/dtb.img AnyKernel3/
           fi
+          echo "AnyKernel3 contents:"
           ls -la AnyKernel3/
 
       - name: Package AnyKernel3 zip
@@ -195,7 +197,7 @@ jobs:
             - Build date: `${{ env.BUILD_DATE }}`
             - Kernel source: ExtremeXT/android_kernel_samsung_s5e9925 @ `${{ env.KERNEL_COMMIT }}`
             - Toolchain: ZyCromerZ Clang 15
-            - Compression: lz4
+            - Format: raw Image (Samsung b0s native format)
 
             ## Features
             - **BBR** TCP congestion control (default)
