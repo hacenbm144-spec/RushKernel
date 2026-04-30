@@ -25,6 +25,7 @@ ramdisk_compression=auto;
 patch_vbmeta_flag=auto;
 
 ## AnyKernel install
+set -x;
 . tools/ak3-core.sh;
 
 ## boot install
