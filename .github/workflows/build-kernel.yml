@@ -1,1 +1,47 @@
+name: Build RushKernel
 
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      release:
+        description: 'Create GitHub Release'
+        type: boolean
+        default: true
+
+env:
+  KERNEL_NAME: RushKernel
+  DEVICE: b0s
+  KERNEL_REPO: https://github.com/ExtremeXT/android_kernel_samsung_s5e9925
+  ANYKERNEL_REPO: https://github.com/osm0sis/AnyKernel3
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y bc bison flex libssl-dev make libelf-dev libncurses5-dev zstd lz4 cpio python3 git wget unzip device-tree-compiler ccache
+
+      - name: Set build variables
+        run: echo "BUILD_DATE=$(date +%Y%m%d)" >> $GITHUB_ENV && echo "SHORT_SHA=$(echo ${GITHUB_SHA} | cut -c1-7)" >> $GITHUB_ENV
+
+      - name: Clone kernel source (try common branches)
+        run: git clone --depth=1 ${{ env.KERNEL_REPO }} kernel || echo "clone failed"
+
+      - name: List branches and configs (DIAGNOSTIC)
+        run: cd kernel && echo "=== BRANCHES ===" && git branch -a && echo "=== CONFIGS ===" && ls arch/arm64/configs/ && echo "=== B0S CONFIGS ===" && ls arch/arm64/configs/ | grep -i b0s || echo "no b0s config found by name" && echo "=== EXYNOS CONFIGS ===" && ls arch/arm64/configs/ | grep -i exynos || echo "no exynos config found"
+
+      - name: Show README and build instructions if any
+        run: cd kernel && cat README.md 2>/dev/null | head -50 || echo "no README" && cat BUILD.md 2>/dev/null | head -50 || echo "no BUILD.md"
+
+      - name: Upload diagnostic info
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagnostic-info
+          path: |
+            kernel/arch/arm64/configs/
+          retention-days: 7
