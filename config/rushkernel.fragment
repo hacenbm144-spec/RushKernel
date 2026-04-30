@@ -1,0 +1,71 @@
+# =============================================================================
+# RushKernel custom configuration fragment
+# =============================================================================
+# This file is appended on top of:
+#   1. s5e9925_defconfig  (Exynos 2200 SoC base)
+#   2. b0s.config         (Galaxy S22 Ultra Exynos device-specific)
+#
+# Only RushKernel-specific overrides go here.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Network: BBR TCP congestion control
+# -----------------------------------------------------------------------------
+# BBR (Bottleneck Bandwidth and RTT) provides significantly better throughput
+# and lower latency vs the default CUBIC, especially on mobile networks.
+CONFIG_TCP_CONG_BBR=y
+CONFIG_TCP_CONG_ADVANCED=y
+CONFIG_DEFAULT_BBR=y
+CONFIG_DEFAULT_TCP_CONG="bbr"
+
+# -----------------------------------------------------------------------------
+# Network: FQ packet scheduler
+# -----------------------------------------------------------------------------
+# Fair Queueing scheduler pairs perfectly with BBR for optimal performance.
+CONFIG_NET_SCH_FQ=y
+CONFIG_NET_SCH_FQ_CODEL=y
+CONFIG_DEFAULT_NET_SCH="fq"
+
+# -----------------------------------------------------------------------------
+# Network: TCP Fast Open
+# -----------------------------------------------------------------------------
+# Reduces TCP connection setup latency by sending data in the SYN packet.
+CONFIG_TCP_FASTOPEN=y
+
+# -----------------------------------------------------------------------------
+# Memory: MGLRU (Multi-Gen LRU)
+# -----------------------------------------------------------------------------
+# Modern memory management replacing classical LRU. Better responsiveness
+# under memory pressure, especially helpful for gaming and multitasking.
+CONFIG_LRU_GEN=y
+CONFIG_LRU_GEN_ENABLED=y
+
+# -----------------------------------------------------------------------------
+# Memory: ZRAM with zstd compression
+# -----------------------------------------------------------------------------
+# zstd offers excellent compression ratio with reasonable CPU cost.
+# Better than default lz4 for memory-constrained scenarios.
+CONFIG_ZRAM=y
+CONFIG_ZRAM_DEF_COMP_ZSTD=y
+CONFIG_ZRAM_DEF_COMP="zstd"
+
+# -----------------------------------------------------------------------------
+# Memory: ZSWAP
+# -----------------------------------------------------------------------------
+# Compressed cache for swap pages. Complements ZRAM.
+CONFIG_ZSWAP=y
+CONFIG_ZSWAP_DEFAULT_ON=y
+CONFIG_ZSWAP_COMPRESSOR_DEFAULT_ZSTD=y
+CONFIG_ZSWAP_COMPRESSOR_DEFAULT="zstd"
+
+# -----------------------------------------------------------------------------
+# Networking: WireGuard VPN
+# -----------------------------------------------------------------------------
+# Modern, fast, secure VPN protocol built into the kernel.
+CONFIG_WIREGUARD=y
+
+# -----------------------------------------------------------------------------
+# Branding: Kernel local version
+# -----------------------------------------------------------------------------
+CONFIG_LOCALVERSION="-RushKernel"
+CONFIG_LOCALVERSION_AUTO=n
