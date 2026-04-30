@@ -65,11 +65,14 @@ jobs:
           echo "Cloned commit: $(git rev-parse HEAD)"
           echo "KERNEL_COMMIT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
 
-      - name: Set up Clang toolchain
+      - name: Set up Clang toolchain (auto-detect latest ZyC)
         run: |
           mkdir -p toolchain/clang
           cd toolchain/clang
-          wget -q https://github.com/ZyCromerZ/Clang/releases/download/19.0.0git-20240728-release/Clang-19.0.0git-20240728.tar.gz -O clang.tar.gz
+          LATEST_URL=$(curl -s https://raw.githubusercontent.com/ZyCromerZ/Clang/main/Clang-15-link.txt | tr -d '[:space:]')
+          echo "Downloading from: $LATEST_URL"
+          wget -q "$LATEST_URL" -O clang.tar.gz
+          ls -la clang.tar.gz
           tar -xzf clang.tar.gz
           rm clang.tar.gz
           ls bin/clang
@@ -172,7 +175,7 @@ jobs:
             ## Build info
             - Build date: `${{ env.BUILD_DATE }}`
             - Kernel source: ExtremeXT/android_kernel_samsung_s5e9925 @ `${{ env.KERNEL_COMMIT }}`
-            - Toolchain: ZyCromerZ Clang 19
+            - Toolchain: ZyCromerZ Clang 15
 
             ## Features
             - **BBR** TCP congestion control (default)
