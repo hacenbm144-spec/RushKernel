@@ -118,6 +118,22 @@ jobs:
           file Image* dtb* dtbo* 2>/dev/null || true
           [ -f Image ] || [ -f Image.gz ] || [ -f Image.lz4 ] || (echo "ERROR: No kernel image produced" && exit 1)
 
+      - name: Ensure Image.lz4 exists (force lz4 compression)
+        run: |
+          cd kernel/out/arch/arm64/boot
+          if [ ! -f Image.lz4 ]; then
+            echo "Image.lz4 not produced by kernel build, creating manually from Image"
+            if [ -f Image ]; then
+              lz4 -B6 --content-size -9 Image Image.lz4
+            elif [ -f Image.gz ]; then
+              gunzip -k Image.gz
+              lz4 -B6 --content-size -9 Image Image.lz4
+            fi
+          fi
+          ls -la Image*
+          echo "Final kernel image format check:"
+          file Image.lz4
+
       - name: Set up AnyKernel3
         run: |
           git clone --depth=1 ${{ env.ANYKERNEL_REPO }} AnyKernel3
@@ -127,16 +143,17 @@ jobs:
 
       - name: Copy kernel image to AnyKernel3
         run: |
-          if [ -f kernel/out/arch/arm64/boot/Image.lz4 ]; then
-            cp kernel/out/arch/arm64/boot/Image.lz4 AnyKernel3/
-          elif [ -f kernel/out/arch/arm64/boot/Image.gz ]; then
-            cp kernel/out/arch/arm64/boot/Image.gz AnyKernel3/
-          elif [ -f kernel/out/arch/arm64/boot/Image ]; then
-            cp kernel/out/arch/arm64/boot/Image AnyKernel3/
-          fi
+          cp kernel/out/arch/arm64/boot/Image.lz4 AnyKernel3/
           if [ -f kernel/out/arch/arm64/boot/dtbo.img ]; then
             cp kernel/out/arch/arm64/boot/dtbo.img AnyKernel3/
+            echo "dtbo.img included"
+          else
+            echo "WARNING: dtbo.img not produced — using stock dtbo at flash time"
           fi
+          if [ -f kernel/out/arch/arm64/boot/dtb.img ]; then
+            cp kernel/out/arch/arm64/boot/dtb.img AnyKernel3/
+          fi
+          ls -la AnyKernel3/
 
       - name: Package AnyKernel3 zip
         run: |
@@ -178,6 +195,7 @@ jobs:
             - Build date: `${{ env.BUILD_DATE }}`
             - Kernel source: ExtremeXT/android_kernel_samsung_s5e9925 @ `${{ env.KERNEL_COMMIT }}`
             - Toolchain: ZyCromerZ Clang 15
+            - Compression: lz4
 
             ## Features
             - **BBR** TCP congestion control (default)
