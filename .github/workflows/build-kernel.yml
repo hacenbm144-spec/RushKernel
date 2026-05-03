@@ -9,35 +9,40 @@ on:
       - '.github/workflows/build-kernel.yml'
   workflow_dispatch:
     inputs:
-      kernel_branch:
-        description: 'Kernel source branch (leave empty for default)'
-        required: false
-        default: ''
+      build_variant:
+        description: 'Build variant'
+        type: choice
+        options:
+          - vanilla
+          - westwood
+          - rushkernel-full
+        default: vanilla
       create_release:
         description: 'Create GitHub Release'
         type: boolean
-        default: true
+        default: false
       version:
-        description: 'Version tag (e.g. v1.0.0)'
+        description: 'Version tag'
         required: false
-        default: 'v1.0.0'
+        default: 'v0.1.0-vanilla'
 
 env:
   KERNEL_NAME: RushKernel
   DEVICE_CODENAME: b0s
   DEVICE_MODEL: SM-S908B
-  KERNEL_REPO: https://github.com/ExtremeXT/android_kernel_samsung_s5e9925
+  KERNEL_SOURCE_URL: https://github.com/hacenbm144-spec/RushKernel/releases/download/SM-908B-source/Kernel.tar.gz
   ANYKERNEL_REPO: https://github.com/osm0sis/AnyKernel3
   ARCH: arm64
-  SOC_DEFCONFIG: s5e9925_defconfig
-  DEVICE_FRAGMENT: b0s.config
-  RUSH_FRAGMENT: rushkernel.config
+  DEFCONFIG: s5e9925-b0sxxx_defconfig
+  TARGET_SOC: s5e9925
+  PLATFORM_VERSION: '12'
+  ANDROID_MAJOR_VERSION: s
 
 jobs:
   build:
     name: Build kernel for b0s
     runs-on: ubuntu-22.04
-    timeout-minutes: 60
+    timeout-minutes: 90
 
     steps:
       - name: Checkout RushKernel repo
@@ -46,25 +51,44 @@ jobs:
       - name: Set up build environment
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc bison flex libssl-dev make libelf-dev libncurses5-dev zstd lz4 cpio python3 git wget unzip device-tree-compiler ccache gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi
+          sudo apt-get install -y bc bison flex libssl-dev make libelf-dev \
+            libncurses5-dev zstd lz4 cpio python3 git wget unzip device-tree-compiler \
+            ccache gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi \
+            binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi \
+            libelf-dev pahole rsync
 
       - name: Set build metadata
         run: |
           echo "BUILD_DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
           echo "SHORT_SHA=$(echo ${GITHUB_SHA} | cut -c1-7)" >> $GITHUB_ENV
-          echo "VERSION=${{ inputs.version || 'v1.0.0' }}" >> $GITHUB_ENV
-          echo "ZIP_NAME=${{ env.KERNEL_NAME }}-${{ inputs.version || 'v1.0.0' }}-${{ env.DEVICE_CODENAME }}-$(date +%Y%m%d).zip" >> $GITHUB_ENV
+          echo "VARIANT=${{ inputs.build_variant || 'vanilla' }}" >> $GITHUB_ENV
+          echo "VERSION=${{ inputs.version || 'v0.1.0-vanilla' }}" >> $GITHUB_ENV
+          echo "ZIP_NAME=${{ env.KERNEL_NAME }}-${{ inputs.build_variant || 'vanilla' }}-${{ env.DEVICE_CODENAME }}-$(date +%Y%m%d).zip" >> $GITHUB_ENV
 
-      - name: Clone kernel source
+      - name: Download Samsung kernel source
         run: |
-          if [ -n "${{ inputs.kernel_branch }}" ]; then
-            git clone --depth=1 -b "${{ inputs.kernel_branch }}" "${{ env.KERNEL_REPO }}" kernel
-          else
-            git clone --depth=1 "${{ env.KERNEL_REPO }}" kernel
+          echo "Downloading Samsung's official Android 16 kernel source..."
+          wget -q --show-progress "${{ env.KERNEL_SOURCE_URL }}" -O Kernel.tar.gz
+          ls -lh Kernel.tar.gz
+          echo "Extracting..."
+          mkdir -p kernel
+          tar -xzf Kernel.tar.gz -C kernel
+          rm Kernel.tar.gz
+          echo "Looking for kernel root..."
+          # The tar might extract to kernel/Kernel/ or kernel/ depending on archive structure
+          if [ -d kernel/Kernel ]; then
+            mv kernel/Kernel/* kernel/
+            mv kernel/Kernel/.* kernel/ 2>/dev/null || true
+            rmdir kernel/Kernel
           fi
-          cd kernel
-          echo "Cloned commit: $(git rev-parse HEAD)"
-          echo "KERNEL_COMMIT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+          echo "Kernel source structure:"
+          ls -la kernel/ | head -20
+          echo ""
+          echo "Verifying it's the right source:"
+          head -10 kernel/Makefile
+          echo ""
+          echo "Looking for b0s defconfig:"
+          ls kernel/arch/arm64/configs/ | grep -i b0s || echo "Not found in arch/arm64/configs!"
 
       - name: Set up Clang toolchain (auto-detect latest ZyC)
         run: |
@@ -73,67 +97,123 @@ jobs:
           LATEST_URL=$(curl -s https://raw.githubusercontent.com/ZyCromerZ/Clang/main/Clang-15-link.txt | tr -d '[:space:]')
           echo "Downloading from: $LATEST_URL"
           wget -q "$LATEST_URL" -O clang.tar.gz
-          ls -la clang.tar.gz
           tar -xzf clang.tar.gz
           rm clang.tar.gz
           ls bin/clang
           bin/clang --version
 
-      - name: Apply RushKernel customizations
+      - name: Apply Samsung Makefile patches
         run: |
-          cp config/${{ env.RUSH_FRAGMENT }} kernel/arch/arm64/configs/${{ env.RUSH_FRAGMENT }}
-          echo "RushKernel custom config applied"
-          ls -la kernel/arch/arm64/configs/ | grep -E "b0s|rushkernel|s5e9925"
+          cd kernel
+          
+          echo "=== Patch: Remove GCC wrapper from Makefile if present ==="
+          if grep -q "REAL_CC" Makefile; then
+            echo "REAL_CC found in Makefile, removing..."
+            sed -i 's/REAL_CC.*=.*/CC = $(CROSS_COMPILE)gcc/' Makefile
+          else
+            echo "No REAL_CC wrapper found - clean Makefile"
+          fi
+          
+          if grep -q "CFP_CC" Makefile; then
+            echo "CFP_CC found in Makefile, removing..."
+            sed -i '/CFP_CC/d' Makefile
+          fi
+          
+          # Remove gcc-wrapper script reference if exists
+          if grep -q "scripts/gcc-wrapper" Makefile; then
+            sed -i '/scripts\/gcc-wrapper/d' Makefile
+            echo "gcc-wrapper reference removed"
+          fi
+          
+          echo "Patches applied successfully"
+
+      - name: Apply variant-specific config (skipped for vanilla)
+        if: ${{ inputs.build_variant != 'vanilla' && inputs.build_variant != null }}
+        run: |
+          cd kernel
+          if [ "${{ env.VARIANT }}" = "westwood" ]; then
+            echo "Adding Westwood TCP support..."
+            cp ../config/westwood.config arch/arm64/configs/westwood.config
+          elif [ "${{ env.VARIANT }}" = "rushkernel-full" ]; then
+            echo "Adding full RushKernel features..."
+            cp ../config/rushkernel.config arch/arm64/configs/rushkernel.config
+          fi
 
       - name: Configure kernel
         run: |
           cd kernel
           export PATH="${GITHUB_WORKSPACE}/toolchain/clang/bin:${PATH}"
-          make O=out ARCH=${{ env.ARCH }} \
-            LLVM=1 LLVM_IAS=1 \
-            CC=clang \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_COMPAT=arm-linux-gnueabi- \
-            ${{ env.SOC_DEFCONFIG }} \
-            ${{ env.DEVICE_FRAGMENT }} \
-            ${{ env.RUSH_FRAGMENT }}
+          
+          # Samsung's exact environment variables
+          export TARGET_SOC=${{ env.TARGET_SOC }}
+          export PLATFORM_VERSION=${{ env.PLATFORM_VERSION }}
+          export ANDROID_MAJOR_VERSION=${{ env.ANDROID_MAJOR_VERSION }}
+          export LLVM=1 LLVM_IAS=1
+          export ARCH=${{ env.ARCH }}
+          
+          echo "=== Build Environment ==="
+          echo "TARGET_SOC: $TARGET_SOC"
+          echo "PLATFORM_VERSION: $PLATFORM_VERSION"
+          echo "ANDROID_MAJOR_VERSION: $ANDROID_MAJOR_VERSION"
+          echo "VARIANT: ${{ env.VARIANT }}"
+          echo "DEFCONFIG: ${{ env.DEFCONFIG }}"
+          
+          # NO O=out for Samsung Exynos!
+          if [ "${{ env.VARIANT }}" = "vanilla" ]; then
+            echo "=== Vanilla build: only base defconfig ==="
+            make ARCH=arm64 LLVM=1 LLVM_IAS=1 \
+              CC=clang \
+              CROSS_COMPILE=aarch64-linux-gnu- \
+              CROSS_COMPILE_COMPAT=arm-linux-gnueabi- \
+              ${{ env.DEFCONFIG }}
+          elif [ "${{ env.VARIANT }}" = "westwood" ]; then
+            echo "=== Westwood build: defconfig + westwood.config ==="
+            make ARCH=arm64 LLVM=1 LLVM_IAS=1 \
+              CC=clang \
+              CROSS_COMPILE=aarch64-linux-gnu- \
+              CROSS_COMPILE_COMPAT=arm-linux-gnueabi- \
+              ${{ env.DEFCONFIG }} westwood.config
+          elif [ "${{ env.VARIANT }}" = "rushkernel-full" ]; then
+            echo "=== Full build: defconfig + all RushKernel configs ==="
+            make ARCH=arm64 LLVM=1 LLVM_IAS=1 \
+              CC=clang \
+              CROSS_COMPILE=aarch64-linux-gnu- \
+              CROSS_COMPILE_COMPAT=arm-linux-gnueabi- \
+              ${{ env.DEFCONFIG }} rushkernel.config
+          fi
 
       - name: Build kernel
         run: |
           cd kernel
           export PATH="${GITHUB_WORKSPACE}/toolchain/clang/bin:${PATH}"
+          export TARGET_SOC=${{ env.TARGET_SOC }}
+          export PLATFORM_VERSION=${{ env.PLATFORM_VERSION }}
+          export ANDROID_MAJOR_VERSION=${{ env.ANDROID_MAJOR_VERSION }}
+          export LLVM=1 LLVM_IAS=1
+          export ARCH=${{ env.ARCH }}
           export KBUILD_BUILD_USER="hacenbm144"
-          export KBUILD_BUILD_HOST="RushKernel-CI"
-          make -j$(nproc) O=out ARCH=${{ env.ARCH }} \
-            LLVM=1 LLVM_IAS=1 \
+          export KBUILD_BUILD_HOST="RushKernel-CI-${{ env.VARIANT }}"
+          
+          echo "=== Starting kernel compilation ==="
+          # NO O=out for Samsung Exynos!
+          make -j$(nproc) ARCH=arm64 LLVM=1 LLVM_IAS=1 \
             CC=clang \
             CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_COMPAT=arm-linux-gnueabi- \
             2>&1 | tee ../build.log
 
-      - name: Verify and prepare raw kernel Image
+      - name: Verify build output
         run: |
-          cd kernel/out/arch/arm64/boot
+          cd kernel/arch/arm64/boot
           ls -la
           file Image* dtb* dtbo* 2>/dev/null || true
-          # Samsung b0s requires raw uncompressed Image (KERNEL_FMT=raw)
-          # If only compressed versions exist, decompress to raw Image
           if [ ! -f Image ]; then
-            echo "Raw Image not found, attempting to decompress..."
-            if [ -f Image.gz ]; then
-              gunzip -k Image.gz
-              echo "Decompressed Image.gz to Image"
-            elif [ -f Image.lz4 ]; then
-              lz4 -d Image.lz4 Image
-              echo "Decompressed Image.lz4 to Image"
-            else
-              echo "ERROR: No kernel image found in any format"
-              exit 1
-            fi
+            echo "ERROR: No raw kernel Image produced!"
+            exit 1
           fi
-          ls -la Image
+          echo "=== Kernel built successfully ==="
           file Image
-          echo "Kernel ready as raw Image (matches Samsung b0s KERNEL_FMT=raw)"
+          echo "Kernel size: $(stat -c %s Image) bytes"
 
       - name: Set up AnyKernel3
         run: |
@@ -142,17 +222,15 @@ jobs:
           cp anykernel/anykernel.sh AnyKernel3/anykernel.sh
           chmod +x AnyKernel3/anykernel.sh
 
-      - name: Copy raw kernel Image to AnyKernel3
+      - name: Copy kernel to AnyKernel3
         run: |
-          cp kernel/out/arch/arm64/boot/Image AnyKernel3/Image
-          if [ -f kernel/out/arch/arm64/boot/dtbo.img ]; then
-            cp kernel/out/arch/arm64/boot/dtbo.img AnyKernel3/
+          cp kernel/arch/arm64/boot/Image AnyKernel3/Image
+          if [ -f kernel/arch/arm64/boot/dtbo.img ]; then
+            cp kernel/arch/arm64/boot/dtbo.img AnyKernel3/
             echo "dtbo.img included"
-          else
-            echo "WARNING: dtbo.img not produced — flashing kernel only"
           fi
-          if [ -f kernel/out/arch/arm64/boot/dtb.img ]; then
-            cp kernel/out/arch/arm64/boot/dtb.img AnyKernel3/
+          if [ -f kernel/arch/arm64/boot/dtb.img ]; then
+            cp kernel/arch/arm64/boot/dtb.img AnyKernel3/
           fi
           echo "AnyKernel3 contents:"
           ls -la AnyKernel3/
@@ -168,7 +246,7 @@ jobs:
       - name: Upload kernel zip artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.KERNEL_NAME }}-${{ env.BUILD_DATE }}-${{ env.SHORT_SHA }}
+          name: ${{ env.KERNEL_NAME }}-${{ env.VARIANT }}-${{ env.BUILD_DATE }}-${{ env.SHORT_SHA }}
           path: |
             ${{ env.ZIP_NAME }}
             ${{ env.ZIP_NAME }}.sha256
@@ -178,45 +256,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: build-log-${{ env.BUILD_DATE }}-${{ env.SHORT_SHA }}
+          name: build-log-${{ env.VARIANT }}-${{ env.BUILD_DATE }}-${{ env.SHORT_SHA }}
           path: build.log
-          retention-days: 14
-
-      - name: Create GitHub Release
-        if: github.event_name == 'workflow_dispatch' && inputs.create_release == true
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ env.VERSION }}-${{ env.BUILD_DATE }}
-          name: RushKernel ${{ env.VERSION }} (${{ env.BUILD_DATE }})
-          body: |
-            # RushKernel ${{ env.VERSION }}
-
-            Custom kernel for **Samsung Galaxy S22 Ultra (Exynos)** — `b0s` / `SM-S908B`
-
-            ## Build info
-            - Build date: `${{ env.BUILD_DATE }}`
-            - Kernel source: ExtremeXT/android_kernel_samsung_s5e9925 @ `${{ env.KERNEL_COMMIT }}`
-            - Toolchain: ZyCromerZ Clang 15
-            - Format: raw Image (Samsung b0s native format)
-
-            ## Features
-            - **BBR** TCP congestion control (default)
-            - **FQ** packet scheduler (default)
-            - **TCP Fast Open**
-            - **MGLRU** Multi-Gen LRU memory management
-            - **ZRAM** with zstd compression
-            - **ZSWAP** enabled by default
-            - **WireGuard** built-in
-
-            ## Installation
-            See INSTALL.md for full instructions.
-
-            ## Disclaimer
-            Only flash on **SM-S908B (b0s)**.
-          files: |
-            ${{ env.ZIP_NAME }}
-            ${{ env.ZIP_NAME }}.sha256
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          retention-days
