@@ -112,7 +112,7 @@ jobs:
             echo "gcc-wrapper reference removed"
           fi
           echo "Patches applied"
-- name: Fix Samsung kernel C syntax issues
+    - name: Fix Samsung kernel C syntax issues
         run: |
           cd kernel
           
