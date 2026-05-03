@@ -126,7 +126,6 @@ jobs:
           sed -i 's/-Werror=strict-prototypes/-Wno-error=strict-prototypes/g' Makefile
           
           echo "C syntax fixes applied"
-
       - name: Apply variant-specific config
         if: env.VARIANT != 'vanilla'
         run: |
