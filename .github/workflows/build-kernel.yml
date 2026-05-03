@@ -17,10 +17,6 @@ on:
           - westwood
           - rushkernel-full
         default: vanilla
-      create_release:
-        description: 'Create GitHub Release'
-        type: boolean
-        default: false
       version:
         description: 'Version tag'
         required: false
@@ -43,7 +39,6 @@ jobs:
     name: Build kernel for b0s
     runs-on: ubuntu-22.04
     timeout-minutes: 90
-
     steps:
       - name: Checkout RushKernel repo
         uses: actions/checkout@v4
@@ -51,19 +46,19 @@ jobs:
       - name: Set up build environment
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc bison flex libssl-dev make libelf-dev \
-            libncurses5-dev zstd lz4 cpio python3 git wget unzip device-tree-compiler \
-            ccache gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi \
-            binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi \
-            libelf-dev pahole rsync
+          sudo apt-get install -y bc bison flex libssl-dev make libelf-dev libncurses5-dev zstd lz4 cpio python3 git wget unzip device-tree-compiler ccache gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi pahole rsync
 
       - name: Set build metadata
         run: |
           echo "BUILD_DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
           echo "SHORT_SHA=$(echo ${GITHUB_SHA} | cut -c1-7)" >> $GITHUB_ENV
-          echo "VARIANT=${{ inputs.build_variant || 'vanilla' }}" >> $GITHUB_ENV
-          echo "VERSION=${{ inputs.version || 'v0.1.0-vanilla' }}" >> $GITHUB_ENV
-          echo "ZIP_NAME=${{ env.KERNEL_NAME }}-${{ inputs.build_variant || 'vanilla' }}-${{ env.DEVICE_CODENAME }}-$(date +%Y%m%d).zip" >> $GITHUB_ENV
+          VARIANT_VAL="${{ inputs.build_variant }}"
+          if [ -z "$VARIANT_VAL" ]; then VARIANT_VAL="vanilla"; fi
+          echo "VARIANT=$VARIANT_VAL" >> $GITHUB_ENV
+          VERSION_VAL="${{ inputs.version }}"
+          if [ -z "$VERSION_VAL" ]; then VERSION_VAL="v0.1.0-vanilla"; fi
+          echo "VERSION=$VERSION_VAL" >> $GITHUB_ENV
+          echo "ZIP_NAME=${{ env.KERNEL_NAME }}-$VARIANT_VAL-${{ env.DEVICE_CODENAME }}-$(date +%Y%m%d).zip" >> $GITHUB_ENV
 
       - name: Download Samsung kernel source
         run: |
@@ -74,8 +69,6 @@ jobs:
           mkdir -p kernel
           tar -xzf Kernel.tar.gz -C kernel
           rm Kernel.tar.gz
-          echo "Looking for kernel root..."
-          # The tar might extract to kernel/Kernel/ or kernel/ depending on archive structure
           if [ -d kernel/Kernel ]; then
             mv kernel/Kernel/* kernel/
             mv kernel/Kernel/.* kernel/ 2>/dev/null || true
@@ -84,13 +77,13 @@ jobs:
           echo "Kernel source structure:"
           ls -la kernel/ | head -20
           echo ""
-          echo "Verifying it's the right source:"
+          echo "Verifying it is the right source:"
           head -10 kernel/Makefile
           echo ""
           echo "Looking for b0s defconfig:"
-          ls kernel/arch/arm64/configs/ | grep -i b0s || echo "Not found in arch/arm64/configs!"
+          ls kernel/arch/arm64/configs/ | grep -i b0s || echo "Not found in arch/arm64/configs"
 
-      - name: Set up Clang toolchain (auto-detect latest ZyC)
+      - name: Set up Clang toolchain
         run: |
           mkdir -p toolchain/clang
           cd toolchain/clang
@@ -105,30 +98,23 @@ jobs:
       - name: Apply Samsung Makefile patches
         run: |
           cd kernel
-          
-          echo "=== Patch: Remove GCC wrapper from Makefile if present ==="
+          echo "Patch: Remove GCC wrapper from Makefile if present"
           if grep -q "REAL_CC" Makefile; then
-            echo "REAL_CC found in Makefile, removing..."
             sed -i 's/REAL_CC.*=.*/CC = $(CROSS_COMPILE)gcc/' Makefile
-          else
-            echo "No REAL_CC wrapper found - clean Makefile"
+            echo "REAL_CC removed"
           fi
-          
           if grep -q "CFP_CC" Makefile; then
-            echo "CFP_CC found in Makefile, removing..."
             sed -i '/CFP_CC/d' Makefile
+            echo "CFP_CC removed"
           fi
-          
-          # Remove gcc-wrapper script reference if exists
           if grep -q "scripts/gcc-wrapper" Makefile; then
             sed -i '/scripts\/gcc-wrapper/d' Makefile
             echo "gcc-wrapper reference removed"
           fi
-          
-          echo "Patches applied successfully"
+          echo "Patches applied"
 
-      - name: Apply variant-specific config (skipped for vanilla)
-        if: ${{ inputs.build_variant != 'vanilla' && inputs.build_variant != null }}
+      - name: Apply variant-specific config
+        if: env.VARIANT != 'vanilla'
         run: |
           cd kernel
           if [ "${{ env.VARIANT }}" = "westwood" ]; then
@@ -143,43 +129,22 @@ jobs:
         run: |
           cd kernel
           export PATH="${GITHUB_WORKSPACE}/toolchain/clang/bin:${PATH}"
-          
-          # Samsung's exact environment variables
           export TARGET_SOC=${{ env.TARGET_SOC }}
           export PLATFORM_VERSION=${{ env.PLATFORM_VERSION }}
           export ANDROID_MAJOR_VERSION=${{ env.ANDROID_MAJOR_VERSION }}
           export LLVM=1 LLVM_IAS=1
           export ARCH=${{ env.ARCH }}
-          
-          echo "=== Build Environment ==="
+          echo "Build Environment:"
           echo "TARGET_SOC: $TARGET_SOC"
           echo "PLATFORM_VERSION: $PLATFORM_VERSION"
           echo "ANDROID_MAJOR_VERSION: $ANDROID_MAJOR_VERSION"
           echo "VARIANT: ${{ env.VARIANT }}"
-          echo "DEFCONFIG: ${{ env.DEFCONFIG }}"
-          
-          # NO O=out for Samsung Exynos!
           if [ "${{ env.VARIANT }}" = "vanilla" ]; then
-            echo "=== Vanilla build: only base defconfig ==="
-            make ARCH=arm64 LLVM=1 LLVM_IAS=1 \
-              CC=clang \
-              CROSS_COMPILE=aarch64-linux-gnu- \
-              CROSS_COMPILE_COMPAT=arm-linux-gnueabi- \
-              ${{ env.DEFCONFIG }}
+            make ARCH=arm64 LLVM=1 LLVM_IAS=1 CC=clang CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_COMPAT=arm-linux-gnueabi- ${{ env.DEFCONFIG }}
           elif [ "${{ env.VARIANT }}" = "westwood" ]; then
-            echo "=== Westwood build: defconfig + westwood.config ==="
-            make ARCH=arm64 LLVM=1 LLVM_IAS=1 \
-              CC=clang \
-              CROSS_COMPILE=aarch64-linux-gnu- \
-              CROSS_COMPILE_COMPAT=arm-linux-gnueabi- \
-              ${{ env.DEFCONFIG }} westwood.config
+            make ARCH=arm64 LLVM=1 LLVM_IAS=1 CC=clang CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_COMPAT=arm-linux-gnueabi- ${{ env.DEFCONFIG }} westwood.config
           elif [ "${{ env.VARIANT }}" = "rushkernel-full" ]; then
-            echo "=== Full build: defconfig + all RushKernel configs ==="
-            make ARCH=arm64 LLVM=1 LLVM_IAS=1 \
-              CC=clang \
-              CROSS_COMPILE=aarch64-linux-gnu- \
-              CROSS_COMPILE_COMPAT=arm-linux-gnueabi- \
-              ${{ env.DEFCONFIG }} rushkernel.config
+            make ARCH=arm64 LLVM=1 LLVM_IAS=1 CC=clang CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_COMPAT=arm-linux-gnueabi- ${{ env.DEFCONFIG }} rushkernel.config
           fi
 
       - name: Build kernel
@@ -193,14 +158,8 @@ jobs:
           export ARCH=${{ env.ARCH }}
           export KBUILD_BUILD_USER="hacenbm144"
           export KBUILD_BUILD_HOST="RushKernel-CI-${{ env.VARIANT }}"
-          
-          echo "=== Starting kernel compilation ==="
-          # NO O=out for Samsung Exynos!
-          make -j$(nproc) ARCH=arm64 LLVM=1 LLVM_IAS=1 \
-            CC=clang \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_COMPAT=arm-linux-gnueabi- \
-            2>&1 | tee ../build.log
+          echo "Starting kernel compilation..."
+          make -j$(nproc) ARCH=arm64 LLVM=1 LLVM_IAS=1 CC=clang CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_COMPAT=arm-linux-gnueabi- 2>&1 | tee ../build.log
 
       - name: Verify build output
         run: |
@@ -211,7 +170,7 @@ jobs:
             echo "ERROR: No raw kernel Image produced!"
             exit 1
           fi
-          echo "=== Kernel built successfully ==="
+          echo "Kernel built successfully"
           file Image
           echo "Kernel size: $(stat -c %s Image) bytes"
 
@@ -232,7 +191,6 @@ jobs:
           if [ -f kernel/arch/arm64/boot/dtb.img ]; then
             cp kernel/arch/arm64/boot/dtb.img AnyKernel3/
           fi
-          echo "AnyKernel3 contents:"
           ls -la AnyKernel3/
 
       - name: Package AnyKernel3 zip
@@ -258,4 +216,4 @@ jobs:
         with:
           name: build-log-${{ env.VARIANT }}-${{ env.BUILD_DATE }}-${{ env.SHORT_SHA }}
           path: build.log
-          retention-days
+          retention-days: 14
