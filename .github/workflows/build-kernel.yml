@@ -65,7 +65,6 @@ jobs:
           echo "Downloading Samsung's official Android 16 kernel source..."
           wget -q --show-progress "${{ env.KERNEL_SOURCE_URL }}" -O Kernel.tar.gz
           ls -lh Kernel.tar.gz
-          echo "Extracting..."
           mkdir -p kernel
           tar -xzf Kernel.tar.gz -C kernel
           rm Kernel.tar.gz
@@ -74,49 +73,36 @@ jobs:
             mv kernel/Kernel/.* kernel/ 2>/dev/null || true
             rmdir kernel/Kernel
           fi
-          echo "Kernel source structure:"
           ls -la kernel/ | head -20
-          echo ""
-          echo "Verifying it is the right source:"
           head -10 kernel/Makefile
-          echo ""
-          echo "Looking for b0s defconfig:"
-          ls kernel/arch/arm64/configs/ | grep -i b0s || echo "Not found in arch/arm64/configs"
 
       - name: Set up Clang toolchain
         run: |
           mkdir -p toolchain/clang
           cd toolchain/clang
           LATEST_URL=$(curl -s https://raw.githubusercontent.com/ZyCromerZ/Clang/main/Clang-15-link.txt | tr -d '[:space:]')
-          echo "Downloading from: $LATEST_URL"
           wget -q "$LATEST_URL" -O clang.tar.gz
           tar -xzf clang.tar.gz
           rm clang.tar.gz
-          ls bin/clang
           bin/clang --version
 
       - name: Apply Samsung Makefile patches
         run: |
           cd kernel
-          echo "Patch: Remove GCC wrapper from Makefile if present"
           if grep -q "REAL_CC" Makefile; then
             sed -i 's/REAL_CC.*=.*/CC = $(CROSS_COMPILE)gcc/' Makefile
-            echo "REAL_CC removed"
           fi
           if grep -q "CFP_CC" Makefile; then
             sed -i '/CFP_CC/d' Makefile
-            echo "CFP_CC removed"
           fi
           if grep -q "scripts/gcc-wrapper" Makefile; then
             sed -i '/scripts\/gcc-wrapper/d' Makefile
-            echo "gcc-wrapper reference removed"
           fi
-          echo "Makefile patches applied"
 
       - name: Fix Samsung kernel C syntax issues
         run: |
           cd kernel
-          echo "Fix 1: sec_mpam.c old K&R C syntax (declaration only, not call site)"
+          echo "Fix 1: sec_mpam.c old K&R C syntax"
           if [ -f kernel/sched/sec_mpam.c ]; then
             sed -i 's/static int mpam_late_init_register()/static int mpam_late_init_register(void)/' kernel/sched/sec_mpam.c
             sed -i 's/mpam_late_init_register(void);/mpam_late_init_register();/g' kernel/sched/sec_mpam.c
@@ -128,30 +114,33 @@ jobs:
           echo "Fix 3: exynos-cpuhp.c bitwise-instead-of-logical"
           if [ -f drivers/soc/samsung/exynos-cpuhp.c ]; then
             sed -i 's/cpumask_empty(&new_mask) |$/cpumask_empty(\&new_mask) ||/' drivers/soc/samsung/exynos-cpuhp.c
-            echo "After patch (line 283-290):"
-            sed -n '283,290p' drivers/soc/samsung/exynos-cpuhp.c
           fi
-          echo "Fix 4: Disable strict warnings globally as safety net"
+          echo "Fix 4: Disable strict warnings globally"
           sed -i 's/-Werror=strict-prototypes/-Wno-error=strict-prototypes/g' Makefile
           sed -i 's/-Werror=implicit-int/-Wno-error=implicit-int/g' Makefile
           sed -i 's/-Werror=implicit-function-declaration/-Wno-error=implicit-function-declaration/g' Makefile
-          echo "Fix 5: Add comprehensive -Wno flags to KBUILD_CFLAGS"
+          sed -i 's/-Werror=unused-but-set-variable/-Wno-error=unused-but-set-variable/g' Makefile
+          echo "Fix 5: Add -Wno flags to top-level KBUILD_CFLAGS"
           if ! grep -q "Wno-implicit-int" Makefile; then
-            sed -i 's|KBUILD_CFLAGS   :=|KBUILD_CFLAGS   := -Wno-strict-prototypes -Wno-error=strict-prototypes -Wno-implicit-int -Wno-error=implicit-int -Wno-implicit-function-declaration -Wno-error=implicit-function-declaration -Wno-bitwise-instead-of-logical -Wno-error=bitwise-instead-of-logical -Wno-error|' Makefile
+            sed -i 's|KBUILD_CFLAGS   :=|KBUILD_CFLAGS   := -Wno-strict-prototypes -Wno-error=strict-prototypes -Wno-implicit-int -Wno-error=implicit-int -Wno-implicit-function-declaration -Wno-error=implicit-function-declaration -Wno-bitwise-instead-of-logical -Wno-error=bitwise-instead-of-logical -Wno-unused-but-set-variable -Wno-error=unused-but-set-variable -Wno-error|' Makefile
           fi
-          echo "Fix 6: Inject -Wno-error into Samsung sub-Makefiles"
-          find drivers/soc/samsung -name "Makefile" -exec sed -i '1i ccflags-y += -Wno-error -Wno-bitwise-instead-of-logical -Wno-strict-prototypes -Wno-implicit-int -Wno-implicit-function-declaration' {} \;
-          echo "All Samsung C syntax fixes applied"
+          echo "Fix 6: Inject -Wno-error into top-level drivers/Makefile"
+          if [ -f drivers/Makefile ]; then
+            sed -i '1i ccflags-y += -Wno-error -Wno-unused-but-set-variable -Wno-bitwise-instead-of-logical -Wno-strict-prototypes -Wno-implicit-int -Wno-implicit-function-declaration' drivers/Makefile
+          fi
+          echo "Fix 7: Inject -Wno-error into all Samsung-affected directories"
+          for dir in drivers/soc/samsung drivers/sensors drivers/sti drivers/battery drivers/fingerprint drivers/muic drivers/usb/typec drivers/regulator drivers/optics drivers/input/sec_input drivers/input/input_boost drivers/vibrator drivers/firmware/cirrus drivers/samsung drivers/knox drivers/uh drivers/vision drivers/staging/nanohub drivers/leds drivers/mfd drivers/scsi/ufs drivers/spi drivers/i3c drivers/cpufreq drivers/thermal/samsung drivers/clk/samsung drivers/pinctrl/samsung drivers/phy/samsung drivers/dma drivers/iommu drivers/pci/controller/dwc drivers/gpu/drm/samsung drivers/media/platform/exynos drivers/net/wireless/broadcom drivers/nfc; do
+            find "$dir" -name "Makefile" -exec sed -i '1i ccflags-y += -Wno-error -Wno-unused-but-set-variable -Wno-bitwise-instead-of-logical -Wno-strict-prototypes -Wno-implicit-int -Wno-implicit-function-declaration' {} \; 2>/dev/null || true
+          done
+          echo "Fixes applied"
 
       - name: Apply variant-specific config
         if: env.VARIANT != 'vanilla'
         run: |
           cd kernel
           if [ "${{ env.VARIANT }}" = "westwood" ]; then
-            echo "Adding Westwood TCP support..."
             cp ../config/westwood.config arch/arm64/configs/westwood.config
           elif [ "${{ env.VARIANT }}" = "rushkernel-full" ]; then
-            echo "Adding full RushKernel features..."
             cp ../config/rushkernel.config arch/arm64/configs/rushkernel.config
           fi
 
@@ -164,11 +153,6 @@ jobs:
           export ANDROID_MAJOR_VERSION=${{ env.ANDROID_MAJOR_VERSION }}
           export LLVM=1 LLVM_IAS=1
           export ARCH=${{ env.ARCH }}
-          echo "Build Environment:"
-          echo "TARGET_SOC: $TARGET_SOC"
-          echo "PLATFORM_VERSION: $PLATFORM_VERSION"
-          echo "ANDROID_MAJOR_VERSION: $ANDROID_MAJOR_VERSION"
-          echo "VARIANT: ${{ env.VARIANT }}"
           if [ "${{ env.VARIANT }}" = "vanilla" ]; then
             make ARCH=arm64 LLVM=1 LLVM_IAS=1 CC=clang CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_COMPAT=arm-linux-gnueabi- ${{ env.DEFCONFIG }}
           elif [ "${{ env.VARIANT }}" = "westwood" ]; then
@@ -188,7 +172,6 @@ jobs:
           export ARCH=${{ env.ARCH }}
           export KBUILD_BUILD_USER="hacenbm144"
           export KBUILD_BUILD_HOST="RushKernel-CI-${{ env.VARIANT }}"
-          echo "Starting kernel compilation..."
           set -o pipefail
           make -j$(nproc) ARCH=arm64 LLVM=1 LLVM_IAS=1 CC=clang CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_COMPAT=arm-linux-gnueabi- Image dtbs 2>&1 | tee ../build.log
 
@@ -196,13 +179,10 @@ jobs:
         run: |
           cd kernel/arch/arm64/boot
           ls -la
-          file Image* dtb* dtbo* 2>/dev/null || true
           if [ ! -f Image ]; then
             echo "ERROR: No raw kernel Image produced!"
             exit 1
           fi
-          echo "Kernel built successfully"
-          file Image
           echo "Kernel size: $(stat -c %s Image) bytes"
 
       - name: Set up AnyKernel3
@@ -217,19 +197,16 @@ jobs:
           cp kernel/arch/arm64/boot/Image AnyKernel3/Image
           if [ -f kernel/arch/arm64/boot/dtbo.img ]; then
             cp kernel/arch/arm64/boot/dtbo.img AnyKernel3/
-            echo "dtbo.img included"
           fi
           if [ -f kernel/arch/arm64/boot/dtb.img ]; then
             cp kernel/arch/arm64/boot/dtb.img AnyKernel3/
           fi
-          ls -la AnyKernel3/
 
       - name: Package AnyKernel3 zip
         run: |
           cd AnyKernel3
           zip -r9 "../${{ env.ZIP_NAME }}" . -x ".git/*" "README.md" "*.gitignore"
           cd ..
-          ls -la ${{ env.ZIP_NAME }}
           sha256sum ${{ env.ZIP_NAME }} > ${{ env.ZIP_NAME }}.sha256
 
       - name: Upload kernel zip artifact
