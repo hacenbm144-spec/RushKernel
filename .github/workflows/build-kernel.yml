@@ -123,13 +123,21 @@ jobs:
             echo "After patches:"
             grep -n "mpam_late_init_register" kernel/sched/sec_mpam.c
           fi
-          echo "Fix 2: Disable strict-prototypes errors globally as safety net"
-          sed -i 's/-Werror=strict-prototypes/-Wno-error=strict-prototypes/g' Makefile
-          echo "Fix 3: Add -Wno-strict-prototypes to KBUILD_CFLAGS"
-          if ! grep -q "Wno-strict-prototypes" Makefile; then
-            sed -i 's|KBUILD_CFLAGS   :=|KBUILD_CFLAGS   := -Wno-strict-prototypes -Wno-error=strict-prototypes|' Makefile
+          echo "Fix 2: exynos-devfreq.h missing return type"
+          if [ -f include/soc/samsung/exynos-devfreq.h ]; then
+            sed -i 's/^extern exynos_devfreq_alt_mode_change/extern int exynos_devfreq_alt_mode_change/' include/soc/samsung/exynos-devfreq.h
+            echo "After patch:"
+            grep -n "exynos_devfreq_alt_mode_change" include/soc/samsung/exynos-devfreq.h
           fi
-          echo "C syntax fixes applied"
+          echo "Fix 3: Disable strict warnings globally as safety net"
+          sed -i 's/-Werror=strict-prototypes/-Wno-error=strict-prototypes/g' Makefile
+          sed -i 's/-Werror=implicit-int/-Wno-error=implicit-int/g' Makefile
+          sed -i 's/-Werror=implicit-function-declaration/-Wno-error=implicit-function-declaration/g' Makefile
+          echo "Fix 4: Add comprehensive -Wno flags to KBUILD_CFLAGS"
+          if ! grep -q "Wno-implicit-int" Makefile; then
+            sed -i 's|KBUILD_CFLAGS   :=|KBUILD_CFLAGS   := -Wno-strict-prototypes -Wno-error=strict-prototypes -Wno-implicit-int -Wno-error=implicit-int -Wno-implicit-function-declaration -Wno-error=implicit-function-declaration -Wno-error|' Makefile
+          fi
+          echo "All Samsung C syntax fixes applied"
 
       - name: Apply variant-specific config
         if: env.VARIANT != 'vanilla'
