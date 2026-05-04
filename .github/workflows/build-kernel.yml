@@ -111,21 +111,23 @@ jobs:
             sed -i '/scripts\/gcc-wrapper/d' Makefile
             echo "gcc-wrapper reference removed"
           fi
-          echo "Patches applied"
-    - name: Fix Samsung kernel C syntax issues
+          echo "Makefile patches applied"
+
+      - name: Fix Samsung kernel C syntax issues
         run: |
           cd kernel
-          
           echo "Fix 1: sec_mpam.c old K&R C syntax"
           if [ -f kernel/sched/sec_mpam.c ]; then
             sed -i 's/mpam_late_init_register()/mpam_late_init_register(void)/' kernel/sched/sec_mpam.c
             echo "Patched mpam_late_init_register"
+            grep "mpam_late_init_register" kernel/sched/sec_mpam.c | head -3
           fi
-          
           echo "Fix 2: Disable strict-prototypes errors globally as safety net"
           sed -i 's/-Werror=strict-prototypes/-Wno-error=strict-prototypes/g' Makefile
-          
+          echo "Fix 3: Disable other strict warnings that fail with newer Clang"
+          sed -i 's/-Werror$/-Wno-error/g' Makefile || true
           echo "C syntax fixes applied"
+
       - name: Apply variant-specific config
         if: env.VARIANT != 'vanilla'
         run: |
