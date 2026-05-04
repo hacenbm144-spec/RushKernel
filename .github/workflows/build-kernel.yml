@@ -116,16 +116,19 @@ jobs:
       - name: Fix Samsung kernel C syntax issues
         run: |
           cd kernel
-          echo "Fix 1: sec_mpam.c old K&R C syntax"
+          echo "Fix 1: sec_mpam.c old K&R C syntax (declaration only, not call site)"
           if [ -f kernel/sched/sec_mpam.c ]; then
-            sed -i 's/mpam_late_init_register()/mpam_late_init_register(void)/' kernel/sched/sec_mpam.c
-            echo "Patched mpam_late_init_register"
-            grep "mpam_late_init_register" kernel/sched/sec_mpam.c | head -3
+            sed -i 's/static int mpam_late_init_register()/static int mpam_late_init_register(void)/' kernel/sched/sec_mpam.c
+            sed -i 's/mpam_late_init_register(void);/mpam_late_init_register();/g' kernel/sched/sec_mpam.c
+            echo "After patches:"
+            grep -n "mpam_late_init_register" kernel/sched/sec_mpam.c
           fi
           echo "Fix 2: Disable strict-prototypes errors globally as safety net"
           sed -i 's/-Werror=strict-prototypes/-Wno-error=strict-prototypes/g' Makefile
-          echo "Fix 3: Disable other strict warnings that fail with newer Clang"
-          sed -i 's/-Werror$/-Wno-error/g' Makefile || true
+          echo "Fix 3: Add -Wno-strict-prototypes to KBUILD_CFLAGS"
+          if ! grep -q "Wno-strict-prototypes" Makefile; then
+            sed -i 's|KBUILD_CFLAGS   :=|KBUILD_CFLAGS   := -Wno-strict-prototypes -Wno-error=strict-prototypes|' Makefile
+          fi
           echo "C syntax fixes applied"
 
       - name: Apply variant-specific config
@@ -174,7 +177,8 @@ jobs:
           export KBUILD_BUILD_USER="hacenbm144"
           export KBUILD_BUILD_HOST="RushKernel-CI-${{ env.VARIANT }}"
           echo "Starting kernel compilation..."
-          make -j$(nproc) ARCH=arm64 LLVM=1 LLVM_IAS=1 CC=clang CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_COMPAT=arm-linux-gnueabi- 2>&1 | tee ../build.log
+          set -o pipefail
+          make -j$(nproc) ARCH=arm64 LLVM=1 LLVM_IAS=1 CC=clang CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_COMPAT=arm-linux-gnueabi- Image dtbs 2>&1 | tee ../build.log
 
       - name: Verify build output
         run: |
