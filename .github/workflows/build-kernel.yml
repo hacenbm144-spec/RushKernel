@@ -17,6 +17,10 @@ on:
           - westwood
           - rushkernel-full
         default: vanilla
+      include_ksu:
+        description: 'Include KernelSU-Next (root)'
+        type: boolean
+        default: false
       version:
         description: 'Version tag'
         required: false
@@ -54,11 +58,19 @@ jobs:
           echo "SHORT_SHA=$(echo ${GITHUB_SHA} | cut -c1-7)" >> $GITHUB_ENV
           VARIANT_VAL="${{ inputs.build_variant }}"
           if [ -z "$VARIANT_VAL" ]; then VARIANT_VAL="vanilla"; fi
+          KSU_VAL="${{ inputs.include_ksu }}"
+          if [ "$KSU_VAL" = "true" ]; then
+            KSU_SUFFIX="-KSU"
+            echo "KSU=true" >> $GITHUB_ENV
+          else
+            KSU_SUFFIX=""
+            echo "KSU=false" >> $GITHUB_ENV
+          fi
           echo "VARIANT=$VARIANT_VAL" >> $GITHUB_ENV
           VERSION_VAL="${{ inputs.version }}"
           if [ -z "$VERSION_VAL" ]; then VERSION_VAL="v0.1.0-vanilla"; fi
           echo "VERSION=$VERSION_VAL" >> $GITHUB_ENV
-          echo "ZIP_NAME=${{ env.KERNEL_NAME }}-$VARIANT_VAL-${{ env.DEVICE_CODENAME }}-$(date +%Y%m%d).zip" >> $GITHUB_ENV
+          echo "ZIP_NAME=${{ env.KERNEL_NAME }}-$VARIANT_VAL$KSU_SUFFIX-${{ env.DEVICE_CODENAME }}-$(date +%Y%m%d).zip" >> $GITHUB_ENV
 
       - name: Download Samsung kernel source
         run: |
@@ -75,6 +87,18 @@ jobs:
           fi
           ls -la kernel/ | head -20
           head -10 kernel/Makefile
+
+      # KernelSU-Next must be vendored into the source tree before configuring.
+      # The official setup.sh clones the driver, symlinks it to drivers/kernelsu,
+      # and wires up drivers/Makefile + drivers/Kconfig automatically.
+      - name: Set up KernelSU-Next
+        if: env.KSU == 'true'
+        run: |
+          cd kernel
+          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
+          echo "--- verify ---"
+          ls -la drivers/kernelsu
+          grep -n "kernelsu" drivers/Makefile drivers/Kconfig
 
       - name: Set up Clang toolchain
         run: |
@@ -134,14 +158,16 @@ jobs:
           done
           echo "Fixes applied"
 
-      - name: Apply variant-specific config
-        if: env.VARIANT != 'vanilla'
+      - name: Copy config fragments
         run: |
           cd kernel
           if [ "${{ env.VARIANT }}" = "westwood" ]; then
             cp ../config/westwood.config arch/arm64/configs/westwood.config
           elif [ "${{ env.VARIANT }}" = "rushkernel-full" ]; then
             cp ../config/rushkernel.config arch/arm64/configs/rushkernel.config
+          fi
+          if [ "${{ env.KSU }}" = "true" ]; then
+            cp ../config/ksu.config arch/arm64/configs/ksu.config
           fi
 
       - name: Configure kernel
@@ -153,12 +179,20 @@ jobs:
           export ANDROID_MAJOR_VERSION=${{ env.ANDROID_MAJOR_VERSION }}
           export LLVM=1 LLVM_IAS=1
           export ARCH=${{ env.ARCH }}
-          if [ "${{ env.VARIANT }}" = "vanilla" ]; then
-            make ARCH=arm64 LLVM=1 LLVM_IAS=1 CC=clang CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_COMPAT=arm-linux-gnueabi- ${{ env.DEFCONFIG }}
-          elif [ "${{ env.VARIANT }}" = "westwood" ]; then
-            make ARCH=arm64 LLVM=1 LLVM_IAS=1 CC=clang CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_COMPAT=arm-linux-gnueabi- ${{ env.DEFCONFIG }} westwood.config
+          FRAGMENTS=""
+          if [ "${{ env.VARIANT }}" = "westwood" ]; then
+            FRAGMENTS="westwood.config"
           elif [ "${{ env.VARIANT }}" = "rushkernel-full" ]; then
-            make ARCH=arm64 LLVM=1 LLVM_IAS=1 CC=clang CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_COMPAT=arm-linux-gnueabi- ${{ env.DEFCONFIG }} rushkernel.config
+            FRAGMENTS="rushkernel.config"
+          fi
+          if [ "${{ env.KSU }}" = "true" ]; then
+            FRAGMENTS="$FRAGMENTS ksu.config"
+          fi
+          echo "Config fragments: $FRAGMENTS"
+          make ARCH=arm64 LLVM=1 LLVM_IAS=1 CC=clang CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_COMPAT=arm-linux-gnueabi- ${{ env.DEFCONFIG }} $FRAGMENTS
+          echo "--- sanity check merged config ---"
+          if [ "${{ env.KSU }}" = "true" ]; then
+            grep -E "^CONFIG_KSU=" .config || { echo "ERROR: CONFIG_KSU missing from merged .config"; exit 1; }
           fi
 
       - name: Build kernel
@@ -212,7 +246,7 @@ jobs:
       - name: Upload kernel zip artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.KERNEL_NAME }}-${{ env.VARIANT }}-${{ env.BUILD_DATE }}-${{ env.SHORT_SHA }}
+          name: ${{ env.KERNEL_NAME }}-${{ env.VARIANT }}${{ env.KSU == 'true' && '-KSU' || '' }}-${{ env.BUILD_DATE }}-${{ env.SHORT_SHA }}
           path: |
             ${{ env.ZIP_NAME }}
             ${{ env.ZIP_NAME }}.sha256
@@ -222,6 +256,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: build-log-${{ env.VARIANT }}-${{ env.BUILD_DATE }}-${{ env.SHORT_SHA }}
+          name: build-log-${{ env.VARIANT }}${{ env.KSU == 'true' && '-KSU' || '' }}-${{ env.BUILD_DATE }}-${{ env.SHORT_SHA }}
           path: build.log
           retention-days: 14
